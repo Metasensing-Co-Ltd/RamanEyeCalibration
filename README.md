@@ -1,5 +1,7 @@
 # RamanEyeCalibration
-This repo contain streamlit app which enable user get calibration result be peak matching
+This repo contains a Streamlit app that enables users to  get calibration results by peak matching
+
+Demo server: https://ramaneyecalibration-vqd64hojezphbztzamxf8h.streamlit.app/
 
 # How to run
 1. Install the required packages:
