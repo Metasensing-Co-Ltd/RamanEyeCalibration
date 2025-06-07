@@ -3,6 +3,8 @@ This repo contains a Streamlit app that enables users to  get calibration result
 
 Demo server: https://ramaneyecalibration-vqd64hojezphbztzamxf8h.streamlit.app/
 
+Instrution video can be find here: https://youtu.be/Nl_7dTk5NSo
+
 # How to run
 1. Install the required packages:
     ```bash
