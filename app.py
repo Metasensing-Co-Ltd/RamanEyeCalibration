@@ -42,10 +42,88 @@ with st.sidebar:
         help="Upload your Raman spectrum CSV file"
     )
     
-    # Peak detection parameters
-    st.header("🔍 Peak Detection")
-    prominence = st.slider("Peak Prominence", 10, 200, 50)
-    distance = st.slider("Min Peak Distance", 5, 50, 20)
+    # Show peak detection parameters only when file is uploaded
+    if uploaded_file is not None:
+        # Peak detection parameters
+        st.header("🔍 Peak Detection")
+        prominence = st.slider("Peak Prominence", 10, 200, 50)
+        distance = st.slider("Min Peak Distance", 5, 50, 20)
+    
+    # Show coefficient verification only when no file is uploaded
+    if uploaded_file is None:
+        st.divider()
+        
+        # Coefficient verification section
+        st.header("🔍 Coefficient Verification")
+        st.markdown("Load saved polynomial coefficients to verify calibration")
+        
+        # Input format selection
+        coeff_format = st.selectbox(
+            "Coefficient Format",
+            ["Format 1 (B_0 = value)", "Format 2 ('b_coeff': [...])", "Format 3 ([...])"],
+            help="Select the format of your saved coefficients"
+        )
+        
+        # Text area for coefficient input
+        coeff_input = st.text_area(
+            "Paste Coefficients Here",
+            height=150,
+            placeholder="Paste your polynomial coefficients here...\n\nFormat 1 example:\nB_0 = 8.0964272024e+03\nB_1 = -2.4747377411e+01\n...\n\nFormat 2 example:\n'b_coeff': ['+1.0812918E+03', '-8.7966558E-02', ...]\n\nFormat 3 example:\n['+1.0812918E+03', '-8.7966558E-02', ...]"
+        )
+        
+        # Parse coefficients button
+        if st.button("📊 Verify Coefficients", use_container_width=True):
+            if coeff_input.strip():
+                try:
+                    coeffs_parsed = None
+                    
+                    if "Format 1" in coeff_format:
+                        # Parse Format 1: B_0 = value format
+                        lines = coeff_input.strip().split('\n')
+                        coeffs_parsed = []
+                        for line in lines:
+                            if '=' in line and 'B_' in line:
+                                value_part = line.split('=')[1].strip()
+                                coeffs_parsed.append(float(value_part))
+                    
+                    elif "Format 2" in coeff_format:
+                        # Parse Format 2: 'b_coeff': [...] format
+                        import re
+                        match = re.search(r"'b_coeff':\s*\[(.*?)\]", coeff_input, re.DOTALL)
+                        if match:
+                            coeff_str = match.group(1)
+                            # Extract coefficient values
+                            coeff_values = re.findall(r"['\"]([+-]?[0-9]*\.?[0-9]+[eE]?[+-]?[0-9]*)['\"]", coeff_str)
+                            coeffs_parsed = [float(val.replace('+', '')) for val in coeff_values]
+                    
+                    elif "Format 3" in coeff_format:
+                        # Parse Format 3: [...] format
+                        import re
+                        match = re.search(r"\[(.*?)\]", coeff_input, re.DOTALL)
+                        if match:
+                            coeff_str = match.group(1)
+                            # Extract coefficient values
+                            coeff_values = re.findall(r"['\"]([+-]?[0-9]*\.?[0-9]+[eE]?[+-]?[0-9]*)['\"]", coeff_str)
+                            coeffs_parsed = [float(val.replace('+', '')) for val in coeff_values]
+                    
+                    if coeffs_parsed and len(coeffs_parsed) > 0:
+                        # Store parsed coefficients in session state
+                        st.session_state.verified_coeffs = coeffs_parsed
+                        st.session_state.show_verification_plots = True
+                        st.success(f"✅ Successfully parsed {len(coeffs_parsed)} coefficients!")
+                        
+                        # Show parsed coefficients
+                        st.subheader("Parsed Coefficients:")
+                        for i, coeff in enumerate(coeffs_parsed):
+                            st.text(f"B_{i} = {coeff:.6e}")
+                        
+                    else:
+                        st.error("❌ Could not parse coefficients. Please check the format.")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error parsing coefficients: {str(e)}")
+            else:
+                st.warning("⚠️ Please enter coefficients to verify.")
 
 # Main content area
 if uploaded_file is not None:
@@ -604,8 +682,224 @@ if uploaded_file is not None:
                     mime="text/plain"
                 )
 
+    # Add verification plots section after the main content
+    if 'show_verification_plots' in st.session_state and st.session_state.show_verification_plots:
+        st.divider()
+        st.header("🔍 Coefficient Verification Plots")
+        st.markdown("These plots show the pixel-wavelength and pixel-wavenumber relationships using the loaded coefficients.")
+        
+        if 'verified_coeffs' in st.session_state:
+            coeffs = st.session_state.verified_coeffs
+            
+            # Generate pixel range (use full range if data is available, otherwise use default)
+            if pixel_index is not None:
+                x_pixels = np.linspace(min(pixel_index), max(pixel_index), 1000)
+            else:
+                x_pixels = np.linspace(0, 2048, 1000)  # Default range
+            
+            # Calculate wavelengths using the polynomial
+            # Note: coefficients are in ascending order (B_0, B_1, B_2, ...)
+            # but numpy.polyval expects descending order, so we reverse
+            wavelengths = np.polyval(coeffs[::-1], x_pixels)
+            
+            # Calculate wavenumbers from wavelengths
+            wavenumbers = processor.wavelength_to_wavenumber(wavelengths)
+            
+            # Create two columns for the plots
+            plot_col1, plot_col2 = st.columns(2)
+            
+            with plot_col1:
+                # Pixel vs Wavelength plot
+                fig_wave = go.Figure()
+                fig_wave.add_trace(
+                    go.Scatter(
+                        x=x_pixels,
+                        y=wavelengths,
+                        mode='lines',
+                        name='Pixel vs Wavelength',
+                        line=dict(color='blue', width=2)
+                    )
+                )
+                
+                # Add markers for known peaks if they exist
+                if 'matched_pixels' in st.session_state and 'matched_wavenumbers' in st.session_state:
+                    peak_wavelengths = [processor.wavenumber_to_wavelength(wn) 
+                                       for wn in st.session_state.matched_wavenumbers]
+                    fig_wave.add_trace(
+                        go.Scatter(
+                            x=st.session_state.matched_pixels,
+                            y=peak_wavelengths,
+                            mode='markers',
+                            name='Known Peaks',
+                            marker=dict(color='red', size=8)
+                        )
+                    )
+                
+                fig_wave.update_layout(
+                    title="Pixel Position vs Wavelength",
+                    xaxis_title="Pixel Position",
+                    yaxis_title="Wavelength (nm)",
+                    height=400
+                )
+                st.plotly_chart(fig_wave, use_container_width=True)
+            
+            with plot_col2:
+                # Pixel vs Wavenumber plot
+                fig_wn = go.Figure()
+                fig_wn.add_trace(
+                    go.Scatter(
+                        x=x_pixels,
+                        y=wavenumbers,
+                        mode='lines',
+                        name='Pixel vs Wavenumber',
+                        line=dict(color='green', width=2)
+                    )
+                )
+                
+                # Add markers for known peaks if they exist
+                if 'matched_pixels' in st.session_state and 'matched_wavenumbers' in st.session_state:
+                    fig_wn.add_trace(
+                        go.Scatter(
+                            x=st.session_state.matched_pixels,
+                            y=st.session_state.matched_wavenumbers,
+                            mode='markers',
+                            name='Known Peaks',
+                            marker=dict(color='red', size=8)
+                        )
+                    )
+                
+                fig_wn.update_layout(
+                    title="Pixel Position vs Wavenumber",
+                    xaxis_title="Pixel Position",
+                    yaxis_title="Wavenumber (cm⁻¹)",
+                    height=400
+                )
+                st.plotly_chart(fig_wn, use_container_width=True)
+            
+            # Show coefficient information
+            st.subheader("📊 Coefficient Information")
+            coeff_info_col1, coeff_info_col2 = st.columns(2)
+            
+            with coeff_info_col1:
+                st.metric("Polynomial Degree", len(coeffs) - 1)
+                st.metric("Number of Coefficients", len(coeffs))
+            
+            with coeff_info_col2:
+                if pixel_index is not None:
+                    st.metric("Wavelength Range", f"{wavelengths.min():.1f} - {wavelengths.max():.1f} nm")
+                    st.metric("Wavenumber Range", f"{wavenumbers.min():.1f} - {wavenumbers.max():.1f} cm⁻¹")
+            
+            # Detailed coefficient table
+            st.subheader("📋 Detailed Coefficients")
+            coeff_df = pd.DataFrame({
+                'Coefficient': [f'B_{i}' for i in range(len(coeffs))],
+                'Value': [f'{coeff:.10e}' for coeff in coeffs],
+                'Description': [f'x^{i}' if i > 0 else 'constant' for i in range(len(coeffs))]
+            })
+            st.dataframe(coeff_df, use_container_width=True)
+            
+            # Clear verification plots button
+            if st.button("🗑️ Clear Verification Plots"):
+                st.session_state.show_verification_plots = False
+                if 'verified_coeffs' in st.session_state:
+                    del st.session_state.verified_coeffs
+                st.rerun()
+
 else:
     st.info("👆 Please upload a CSV file to begin calibration")
+    
+    # Show coefficient verification plots when no file is uploaded
+    if 'show_verification_plots' in st.session_state and st.session_state.show_verification_plots:
+        st.divider()
+        st.header("🔍 Coefficient Verification Plots")
+        st.markdown("These plots show the pixel-wavelength and pixel-wavenumber relationships using the loaded coefficients.")
+        
+        if 'verified_coeffs' in st.session_state:
+            coeffs = st.session_state.verified_coeffs
+            
+            # Generate pixel range (use default range when no data is available)
+            x_pixels = np.linspace(0, 2048, 1000)  # Default range
+            
+            # Calculate wavelengths using the polynomial
+            # Note: coefficients are in ascending order (B_0, B_1, B_2, ...)
+            # but numpy.polyval expects descending order, so we reverse
+            wavelengths = np.polyval(coeffs[::-1], x_pixels)
+            
+            # Calculate wavenumbers from wavelengths
+            wavenumbers = processor.wavelength_to_wavenumber(wavelengths)
+            
+            # Create two columns for the plots
+            plot_col1, plot_col2 = st.columns(2)
+            
+            with plot_col1:
+                # Pixel vs Wavelength plot
+                fig_wave = go.Figure()
+                fig_wave.add_trace(
+                    go.Scatter(
+                        x=x_pixels,
+                        y=wavelengths,
+                        mode='lines',
+                        name='Pixel vs Wavelength',
+                        line=dict(color='blue', width=2)
+                    )
+                )
+                
+                fig_wave.update_layout(
+                    title="Pixel Position vs Wavelength",
+                    xaxis_title="Pixel Position",
+                    yaxis_title="Wavelength (nm)",
+                    height=400
+                )
+                st.plotly_chart(fig_wave, use_container_width=True)
+            
+            with plot_col2:
+                # Pixel vs Wavenumber plot
+                fig_wn = go.Figure()
+                fig_wn.add_trace(
+                    go.Scatter(
+                        x=x_pixels,
+                        y=wavenumbers,
+                        mode='lines',
+                        name='Pixel vs Wavenumber',
+                        line=dict(color='green', width=2)
+                    )
+                )
+                
+                fig_wn.update_layout(
+                    title="Pixel Position vs Wavenumber",
+                    xaxis_title="Pixel Position",
+                    yaxis_title="Wavenumber (cm⁻¹)",
+                    height=400
+                )
+                st.plotly_chart(fig_wn, use_container_width=True)
+            
+            # Show coefficient information
+            st.subheader("📊 Coefficient Information")
+            coeff_info_col1, coeff_info_col2 = st.columns(2)
+            
+            with coeff_info_col1:
+                st.metric("Polynomial Degree", len(coeffs) - 1)
+                st.metric("Number of Coefficients", len(coeffs))
+            
+            with coeff_info_col2:
+                st.metric("Wavelength Range", f"{wavelengths.min():.1f} - {wavelengths.max():.1f} nm")
+                st.metric("Wavenumber Range", f"{wavenumbers.min():.1f} - {wavenumbers.max():.1f} cm⁻¹")
+            
+            # Detailed coefficient table
+            st.subheader("📋 Detailed Coefficients")
+            coeff_df = pd.DataFrame({
+                'Coefficient': [f'B_{i}' for i in range(len(coeffs))],
+                'Value': [f'{coeff:.10e}' for coeff in coeffs],
+                'Description': [f'x^{i}' if i > 0 else 'constant' for i in range(len(coeffs))]
+            })
+            st.dataframe(coeff_df, use_container_width=True)
+            
+            # Clear verification plots button
+            if st.button("🗑️ Clear Verification Plots"):
+                st.session_state.show_verification_plots = False
+                if 'verified_coeffs' in st.session_state:
+                    del st.session_state.verified_coeffs
+                st.rerun()
     
     # Show example of expected CSV format
     st.subheader("📋 Expected CSV Format")

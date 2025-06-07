@@ -23,7 +23,11 @@ class StreamlitRamanSpectrumProcessor:
     
     def wavelength_to_wavenumber(self, wavelength):
         """Convert wavelength to wavenumber"""
-        return int(10000000/self.laser_wavelength - 10000000/wavelength)
+        result = 10000000/self.laser_wavelength - 10000000/wavelength
+        if np.isscalar(wavelength):
+            return int(result)
+        else:
+            return result.astype(int)
     
     def read_csv_data(self, csv_file):
             """Read CSV file data with robust format handling"""
